@@ -12,6 +12,7 @@ import (
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // Builder constructs a Service instance with customizable providers.
@@ -201,16 +202,13 @@ func (b *Builder) Build() (*Service, error) {
 
 		strategy := ""
 		if b.cfg != nil {
-			strategy = strings.ToLower(strings.TrimSpace(b.cfg.Routing.Strategy))
+			strategy = b.cfg.Routing.Strategy
 		}
-		var selector coreauth.Selector
-		switch strategy {
-		case "fill-first", "fillfirst", "ff":
-			selector = &coreauth.FillFirstSelector{}
-		default:
-			selector = &coreauth.RoundRobinSelector{}
+		normalized, known := normalizeRoutingStrategyWithKnown(strategy)
+		if !known && strings.TrimSpace(strategy) != "" {
+			log.Warnf("unknown routing strategy %q; falling back to %s", strategy, routingStrategyWeighted)
 		}
-
+		selector := selectorForRoutingStrategy(normalized)
 		coreManager = coreauth.NewManager(tokenStore, selector, nil)
 	}
 	// Attach a default RoundTripper provider so providers can opt-in per-auth transports.

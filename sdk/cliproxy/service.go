@@ -510,7 +510,7 @@ func (s *Service) Run(ctx context.Context) error {
 		previousStrategy := ""
 		s.cfgMu.RLock()
 		if s.cfg != nil {
-			previousStrategy = strings.ToLower(strings.TrimSpace(s.cfg.Routing.Strategy))
+			previousStrategy = s.cfg.Routing.Strategy
 		}
 		s.cfgMu.RUnlock()
 
@@ -523,27 +523,16 @@ func (s *Service) Run(ctx context.Context) error {
 			return
 		}
 
-		nextStrategy := strings.ToLower(strings.TrimSpace(newCfg.Routing.Strategy))
-		normalizeStrategy := func(strategy string) string {
-			switch strategy {
-			case "fill-first", "fillfirst", "ff":
-				return "fill-first"
-			default:
-				return "round-robin"
-			}
+		nextStrategy := newCfg.Routing.Strategy
+		previousNormalized, _ := normalizeRoutingStrategyWithKnown(previousStrategy)
+		nextNormalized, nextKnown := normalizeRoutingStrategyWithKnown(nextStrategy)
+		if !nextKnown && strings.TrimSpace(nextStrategy) != "" {
+			log.Warnf("unknown routing strategy %q; falling back to %s", nextStrategy, routingStrategyWeighted)
 		}
-		previousStrategy = normalizeStrategy(previousStrategy)
-		nextStrategy = normalizeStrategy(nextStrategy)
-		if s.coreManager != nil && previousStrategy != nextStrategy {
-			var selector coreauth.Selector
-			switch nextStrategy {
-			case "fill-first":
-				selector = &coreauth.FillFirstSelector{}
-			default:
-				selector = &coreauth.RoundRobinSelector{}
-			}
+		if s.coreManager != nil && previousNormalized != nextNormalized {
+			selector := selectorForRoutingStrategy(nextNormalized)
 			s.coreManager.SetSelector(selector)
-			log.Infof("routing strategy updated to %s", nextStrategy)
+			log.Infof("routing strategy updated to %s", nextNormalized)
 		}
 
 		s.applyRetryConfig(newCfg)

@@ -60,6 +60,40 @@ GLM CODING PLAN 是专为AI编码打造的订阅套餐，每月最低仅需20元
 
 CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-for.me/cn/)
 
+## 按权重路由选择（Antigravity）
+
+要启用按权重选择，请同时配置路由策略与账号权重。
+
+1. 配置路由策略为 `weighted`（默认即为 `weighted`，建议显式写出）
+
+```yaml
+routing:
+  strategy: "weighted" # weighted (default), round-robin, fill-first
+```
+
+2. 在 `auth-dir` 下的账号 JSON 中添加 `priority` / `weight`
+
+```json
+{
+  "type": "antigravity",
+  "email": "foo@bar.com",
+  "access_token": "...",
+  "refresh_token": "...",
+  "priority": 10,
+  "weight": 3
+}
+```
+
+3. 行为说明
+
+- 先过滤不可用账号（禁用/冷却/配额）。
+- 按 `priority` 分组，取最高优先级组。
+- 组内按 `weight` 加权随机选择。
+- `weight` 缺失默认 1，`weight <= 0` 表示不参与选择。
+
+`auth-dir` 的路径在配置文件中通过 `auth-dir` 指定，
+修改账号 JSON 后会由文件监控自动生效。
+
 ## 管理 API 文档
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)

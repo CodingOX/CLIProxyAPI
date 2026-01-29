@@ -121,6 +121,112 @@ func TestFileSynthesizer_Synthesize_ValidAuthFile(t *testing.T) {
 	}
 }
 
+func TestFileSynthesizer_Synthesize_WritesPriorityAndWeight(t *testing.T) {
+	tempDir := t.TempDir()
+
+	authData := map[string]any{
+		"type":     "claude",
+		"priority": 10,
+		"weight":   3,
+	}
+	data, _ := json.Marshal(authData)
+	err := os.WriteFile(filepath.Join(tempDir, "priority-weight.json"), data, 0644)
+	if err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	if auths[0].Attributes["priority"] != "10" {
+		t.Errorf("expected priority 10, got %s", auths[0].Attributes["priority"])
+	}
+	if auths[0].Attributes["weight"] != "3" {
+		t.Errorf("expected weight 3, got %s", auths[0].Attributes["weight"])
+	}
+}
+
+func TestFileSynthesizer_Synthesize_DefaultWeight(t *testing.T) {
+	tempDir := t.TempDir()
+
+	authData := map[string]any{
+		"type": "claude",
+	}
+	data, _ := json.Marshal(authData)
+	err := os.WriteFile(filepath.Join(tempDir, "default-weight.json"), data, 0644)
+	if err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	if auths[0].Attributes["weight"] != "1" {
+		t.Errorf("expected weight 1, got %s", auths[0].Attributes["weight"])
+	}
+}
+
+func TestFileSynthesizer_Synthesize_RejectsDecimalPriorityAndWeight(t *testing.T) {
+	tempDir := t.TempDir()
+
+	authData := map[string]any{
+		"type":     "claude",
+		"priority": 2.5,
+		"weight":   2.5,
+	}
+	data, _ := json.Marshal(authData)
+	err := os.WriteFile(filepath.Join(tempDir, "decimal-metadata.json"), data, 0644)
+	if err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	if _, ok := auths[0].Attributes["priority"]; ok {
+		t.Error("expected priority to be omitted for decimal value")
+	}
+	if auths[0].Attributes["weight"] != "1" {
+		t.Errorf("expected weight 1, got %s", auths[0].Attributes["weight"])
+	}
+}
+
 func TestFileSynthesizer_Synthesize_GeminiProviderMapping(t *testing.T) {
 	tempDir := t.TempDir()
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,6 +26,12 @@ type RoundRobinSelector struct {
 // This "burns" one account before moving to the next, which can help stagger
 // rolling-window subscription caps (e.g. chat message limits).
 type FillFirstSelector struct{}
+
+// WeightedSelector 在最高优先级分组内按权重随机选择。
+type WeightedSelector struct {
+	mu  sync.Mutex
+	rng *rand.Rand
+}
 
 type blockReason int
 
@@ -114,6 +121,27 @@ func authPriority(auth *Auth) int {
 	}
 	parsed, err := strconv.Atoi(raw)
 	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func weightOf(auth *Auth) int {
+	if auth == nil {
+		return 0
+	}
+	if auth.Attributes == nil {
+		return 1
+	}
+	raw := strings.TrimSpace(auth.Attributes["weight"])
+	if raw == "" {
+		return 1
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	if parsed <= 0 {
 		return 0
 	}
 	return parsed
@@ -212,6 +240,57 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 		return nil, err
 	}
 	return available[0], nil
+}
+
+// Pick 在最高优先级候选集中按权重随机选择。
+func (s *WeightedSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	_ = ctx
+	_ = opts
+	now := time.Now()
+	available, err := getAvailableAuths(auths, provider, model, now)
+	if err != nil {
+		return nil, err
+	}
+	if len(available) == 0 {
+		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
+	}
+
+	weights := make([]int64, len(available))
+	var total int64
+	for i, candidate := range available {
+		weight := int64(weightOf(candidate))
+		if weight <= 0 {
+			continue
+		}
+		if math.MaxInt64-total < weight {
+			return nil, &Error{Code: "auth_unavailable", Message: "auth weight overflow"}
+		}
+		weights[i] = weight
+		total += weight
+	}
+	if total == 0 {
+		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
+	}
+
+	s.mu.Lock()
+	if s.rng == nil {
+		s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	target := s.rng.Int63n(total)
+	s.mu.Unlock()
+
+	var accum int64
+	for i, weight := range weights {
+		if weight <= 0 {
+			continue
+		}
+		accum += weight
+		if target < accum {
+			return available[i], nil
+		}
+	}
+
+	return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
 }
 
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {

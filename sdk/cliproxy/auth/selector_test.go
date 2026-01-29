@@ -3,6 +3,9 @@ package auth
 import (
 	"context"
 	"errors"
+	"math"
+	"math/rand"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -173,5 +176,148 @@ func TestRoundRobinSelectorPick_Concurrent(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("concurrent Pick() error = %v", err)
 	default:
+	}
+}
+
+func TestWeightedSelectorPick_DefaultWeight(t *testing.T) {
+	t.Parallel()
+
+	seed := int64(1)
+	selector := &WeightedSelector{rng: rand.New(rand.NewSource(seed))}
+	auths := []*Auth{
+		{ID: "b", Attributes: map[string]string{"weight": "3"}},
+		{ID: "a"},
+	}
+
+	expectedRng := rand.New(rand.NewSource(seed))
+	target := expectedRng.Int63n(4)
+	expectedID := "b"
+	if target < 1 {
+		expectedID = "a"
+	}
+
+	got, err := selector.Pick(context.Background(), "gemini", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil {
+		t.Fatalf("Pick() auth = nil")
+	}
+	if got.ID != expectedID {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, expectedID)
+	}
+}
+
+func TestWeightedSelectorPick_IgnoresZeroWeight(t *testing.T) {
+	t.Parallel()
+
+	selector := &WeightedSelector{rng: rand.New(rand.NewSource(2))}
+	auths := []*Auth{
+		{ID: "a", Attributes: map[string]string{"weight": "0"}},
+		{ID: "b", Attributes: map[string]string{"weight": "2"}},
+	}
+
+	for i := 0; i < 5; i++ {
+		got, err := selector.Pick(context.Background(), "gemini", "", cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() #%d error = %v", i, err)
+		}
+		if got == nil {
+			t.Fatalf("Pick() #%d auth = nil", i)
+		}
+		if got.ID != "b" {
+			t.Fatalf("Pick() #%d auth.ID = %q, want %q", i, got.ID, "b")
+		}
+	}
+}
+
+func TestWeightedSelectorPick_PriorityBuckets(t *testing.T) {
+	t.Parallel()
+
+	seed := int64(3)
+	selector := &WeightedSelector{rng: rand.New(rand.NewSource(seed))}
+	auths := []*Auth{
+		{ID: "low", Attributes: map[string]string{"priority": "0", "weight": "100"}},
+		{ID: "a", Attributes: map[string]string{"priority": "10", "weight": "1"}},
+		{ID: "b", Attributes: map[string]string{"priority": "10", "weight": "3"}},
+	}
+
+	expectedRng := rand.New(rand.NewSource(seed))
+	target := expectedRng.Int63n(4)
+	expectedID := "b"
+	if target < 1 {
+		expectedID = "a"
+	}
+
+	got, err := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil {
+		t.Fatalf("Pick() auth = nil")
+	}
+	if got.ID != expectedID {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, expectedID)
+	}
+	if got.ID == "low" {
+		t.Fatalf("Pick() unexpectedly selected lower priority auth")
+	}
+}
+
+func TestWeightedSelectorPick_AllWeightsZero(t *testing.T) {
+	t.Parallel()
+
+	selector := &WeightedSelector{rng: rand.New(rand.NewSource(4))}
+	auths := []*Auth{
+		{ID: "a", Attributes: map[string]string{"weight": "0"}},
+		{ID: "b", Attributes: map[string]string{"weight": "-1"}},
+		{ID: "c", Attributes: map[string]string{"weight": "nope"}},
+	}
+
+	got, err := selector.Pick(context.Background(), "gemini", "", cliproxyexecutor.Options{}, auths)
+	if err == nil {
+		t.Fatalf("Pick() error = nil")
+	}
+	if got != nil {
+		t.Fatalf("Pick() auth = %v, want nil", got)
+	}
+	var authErr *Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("Pick() error type = %T, want *Error", err)
+	}
+	if authErr.Code != "auth_unavailable" {
+		t.Fatalf("Pick() error code = %q, want %q", authErr.Code, "auth_unavailable")
+	}
+}
+
+func TestWeightedSelectorPick_WeightOverflow(t *testing.T) {
+	t.Parallel()
+
+	selector := &WeightedSelector{rng: rand.New(rand.NewSource(5))}
+	weightStr := strconv.FormatInt(math.MaxInt64, 10)
+	auths := []*Auth{
+		{ID: "a", Attributes: map[string]string{"weight": weightStr}},
+		{ID: "b", Attributes: map[string]string{"weight": weightStr}},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Pick() panic = %v", recovered)
+		}
+	}()
+
+	got, err := selector.Pick(context.Background(), "gemini", "", cliproxyexecutor.Options{}, auths)
+	if err == nil {
+		t.Fatalf("Pick() error = nil")
+	}
+	if got != nil {
+		t.Fatalf("Pick() auth = %v, want nil", got)
+	}
+	var authErr *Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("Pick() error type = %T, want *Error", err)
+	}
+	if authErr.Code != "auth_unavailable" {
+		t.Fatalf("Pick() error code = %q, want %q", authErr.Code, "auth_unavailable")
 	}
 }

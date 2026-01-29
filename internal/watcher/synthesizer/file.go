@@ -3,13 +3,16 @@ package synthesizer
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/geminicli"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 )
 
 // FileSynthesizer generates Auth entries from OAuth JSON files.
@@ -108,6 +111,25 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
+		if raw, ok := metadata["priority"]; ok {
+			if priority, ok := readMetadataIntValue(raw); ok {
+				a.Attributes["priority"] = strconv.Itoa(priority)
+			} else {
+				log.Warnf("auth metadata priority invalid: %s", full)
+			}
+		}
+		weight := 1
+		if raw, ok := metadata["weight"]; ok {
+			if v, ok := readMetadataIntValue(raw); ok {
+				weight = v
+			} else {
+				log.Warnf("auth metadata weight invalid: %s", full)
+			}
+		}
+		if weight < 0 {
+			log.Warnf("auth weight < 0: %s", full)
+		}
+		a.Attributes["weight"] = strconv.Itoa(weight)
 		ApplyAuthExcludedModelsMeta(a, cfg, nil, "oauth")
 		if provider == "gemini-cli" {
 			if virtuals := SynthesizeGeminiVirtualAuths(a, metadata, now); len(virtuals) > 0 {
@@ -122,6 +144,66 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+func readMetadataIntValue(raw any) (int, bool) {
+	const maxInt = int(^uint(0) >> 1)
+	const minInt = -maxInt - 1
+	if raw == nil {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int64:
+		if v > int64(maxInt) || v < int64(minInt) {
+			return 0, false
+		}
+		return int(v), true
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
+		if math.Trunc(v) != v {
+			return 0, false
+		}
+		if v > float64(maxInt) || v < float64(minInt) {
+			return 0, false
+		}
+		return int(v), true
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			if i > int64(maxInt) || i < int64(minInt) {
+				return 0, false
+			}
+			return int(i), true
+		}
+		if f, err := v.Float64(); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return 0, false
+			}
+			if math.Trunc(f) != f {
+				return 0, false
+			}
+			if f > float64(maxInt) || f < float64(minInt) {
+				return 0, false
+			}
+			return int(f), true
+		}
+		return 0, false
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, err := strconv.ParseInt(trimmed, 10, 0)
+		if err != nil {
+			return 0, false
+		}
+		return int(parsed), true
+	default:
+		return 0, false
+	}
 }
 
 // SynthesizeGeminiVirtualAuths creates virtual Auth entries for multi-project Gemini credentials.
