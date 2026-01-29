@@ -1,6 +1,7 @@
 package managementasset
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -435,6 +437,8 @@ func atomicWriteFile(path string, data []byte) error {
 		_ = os.Remove(tmpName)
 	}()
 
+	data = patchManagementAsset(data)
+
 	if _, err = tmpFile.Write(data); err != nil {
 		return err
 	}
@@ -465,4 +469,57 @@ func parseDigest(digest string) string {
 	}
 
 	return strings.ToLower(strings.TrimSpace(digest))
+}
+
+func patchManagementAsset(data []byte) []byte {
+	// 1. Inject translation keys
+	// Target: routing_strategy_round_robin:"round-robin (...)"
+	// Inject: routing_strategy_weighted:"weighted (权重)", OR routing_strategy_weighted:"weighted",
+	reTrans := regexp.MustCompile(`(routing_strategy_round_robin\s*:\s*"[^"]+")`)
+	if match := reTrans.Find(data); match != nil {
+		original := string(match)
+		// Check if we need Chinese or English suffix based on existing "round-robin" translation
+		var injection string
+		if strings.Contains(original, "轮询") {
+			injection = `routing_strategy_weighted:"weighted (权重)"`
+		} else {
+			injection = `routing_strategy_weighted:"weighted"`
+		}
+
+		// Only inject if not already present
+		if !bytes.Contains(data, []byte(`routing_strategy_weighted:`)) {
+			// Insert before the match
+			// result: ...routing_strategy_weighted:"...",routing_strategy_round_robin:"..."
+			replacement := fmt.Sprintf(`%s,%s`, injection, original)
+			data = bytes.Replace(data, match, []byte(replacement), 1)
+		}
+	}
+
+	// 2. Inject default weighted option for English/fallback if the loop above didn't catch specific context
+	// This ensures "weighted" key exists in the lang object even if exact regex above missed some variation,
+	// checking generic position if specific failed.
+	// Actually, let's keep it simple. If the above specific key injection worked, good.
+
+	// 3. Inject JSX Option
+	// Target: g.jsx("option",{value:"round-robin",children:i("basic_settings.routing_strategy_round_robin")})
+	// Capture "g" or whatever variable name is used for jsx.
+	reOption := regexp.MustCompile(`(\w+(?:\.jsx|\.jsxs)\s*\(\s*"option"\s*,\s*\{\s*value\s*:\s*"round-robin"[^}]+\}\))`)
+	if match := reOption.Find(data); match != nil {
+		if !bytes.Contains(data, []byte(`value:"weighted"`)) {
+			// Extract variable name for jsx function, e.g., "g" from 'g.jsx' or 'e.jsxs'
+			// match[0] starts with the function call.
+			// We can just clone the match and replace values.
+			original := string(match)
+			// Replace value
+			injected := strings.Replace(original, `"round-robin"`, `"weighted"`, 1)
+			// Replace children translation key
+			injected = strings.Replace(injected, `routing_strategy_round_robin"`, `routing_strategy_weighted"`, 1)
+
+			// Insert before: Weighted -> Round-Robin -> Fill-First (as Weighted is default)
+			replacement := fmt.Sprintf(`%s,%s`, injected, original)
+			data = bytes.Replace(data, match, []byte(replacement), 1)
+		}
+	}
+
+	return data
 }

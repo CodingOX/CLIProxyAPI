@@ -59,6 +59,59 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 ## Getting Started
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
+ 
+ ## Routing Strategy: Priority & Weight
+ 
+ The system supports fine-grained control over account selection logic by configuring `priority` and `weight`.
+ 
+ ### 1. Core Logic
+ 
+ The selection process is strictly hierarchical: **Priority First, then Strategy**.
+ 
+ 1.  **Step 1: Hard Isolation by Priority**
+     *   The system filters all healthy accounts and **keeps only the group with the highest priority value**.
+     *   This is an **absolute filter**. If there is an available account with priority 10, an account with priority 9 will **never** be selected (unless all priority 10 accounts are down).
+     *   Default priority is `0`.
+ 
+ 2.  **Step 2: Apply Strategy within the Group**
+     *   Within the "highest priority group" filtered in Step 1, selection is made according to `routing.strategy`:
+         *   **`weighted` (Default)**: Weighted random selection based on `weight`. Higher weight means higher probability. Default weight is `1`.
+         *   **`round-robin`**: Strict round-robin.
+         *   **`fill-first`**: Always use the first available account until it is exhausted.
+ 
+ ### 2. Configuration
+ 
+ First, confirm the routing strategy in `config.yaml` (default is `weighted`):
+ 
+ ```yaml
+ routing:
+   strategy: "weighted" # weighted (default), round-robin, fill-first
+ ```
+ 
+ Then, add fields to the account JSON in `auth-dir`:
+ 
+ ```json
+ {
+   "type": "antigravity", // or other provider types
+   "email": "foo@bar.com",
+   // ... other auth fields ...
+   "priority": 10,   // Priority: Higher is better (Hard Isolation)
+   "weight": 3       // Weight: Probability within the same priority
+ }
+ ```
+ 
+ ### 3. Use Case Examples
+ 
+ *   **Active/Standby (Failover)**:
+     *   Primary account: `priority: 10`
+     *   Backup account: `priority: 0`
+     *   **Result**: As long as the primary account is alive, the backup account will never be called.
+ 
+ *   **Weighted Load Balancing**:
+     *   All accounts have the same `priority` (e.g., default 0).
+     *   High-capacity account: `weight: 10`
+     *   Low-capacity account: `weight: 1`
+     *   **Result**: The high-capacity account handles about 90% of the traffic.
 
 ## Management API
 

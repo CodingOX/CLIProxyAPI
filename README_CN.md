@@ -60,39 +60,58 @@ GLM CODING PLAN 是专为AI编码打造的订阅套餐，每月最低仅需20元
 
 CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-for.me/cn/)
 
-## 按权重路由选择（Antigravity）
+## 路由策略：优先级与权重
 
-要启用按权重选择，请同时配置路由策略与账号权重。
+系统支持通过配置 `priority` (优先级) 和 `weight` (权重) 来精细控制账号选择逻辑。
 
-1. 配置路由策略为 `weighted`（默认即为 `weighted`，建议显式写出）
+### 1. 核心逻辑
+
+选择过程分为两步，**Priority（优先级）** 和 **Strategy（策略）** 是分层生效的：
+
+1.  **第一步：按优先级“硬隔离”**
+    *   系统会检查所有健康的账号，**只保留优先级数值最大**的那一组。
+    *   这是一个**绝对的过滤器**。如果存在优先级为 10 的可用账号，那么优先级为 9 的账号**绝对不会**被选中（除非优先级 10 的全都不可用了）。
+    *   默认优先级为 `0`。
+
+2.  **第二步：组内应用策略**
+    *   在第一步筛选出的“最高优先级组”内部，根据配置的 `routing.strategy` 进行选择：
+        *   **`weighted` (默认)**: 按 `weight` (权重) 进行加权随机。权重越大，概率越高。默认权重为 `1`。
+        *   **`round-robin`**: 严格轮询。
+        *   **`fill-first`**: 总是使用列表中的第一个，直到它耗尽。
+
+### 2. 配置方法
+
+首先在 `config.yaml` 中确认路由策略（默认为 `weighted`）：
 
 ```yaml
 routing:
   strategy: "weighted" # weighted (default), round-robin, fill-first
 ```
 
-2. 在 `auth-dir` 下的账号 JSON 中添加 `priority` / `weight`
+然后在 `auth-dir` 下的账号 JSON 中添加字段：
 
 ```json
 {
-  "type": "antigravity",
+  "type": "antigravity", // 或其他 provider 类型
   "email": "foo@bar.com",
-  "access_token": "...",
-  "refresh_token": "...",
-  "priority": 10,
-  "weight": 3
+  // ... 其他认证字段 ...
+  "priority": 10,   // 优先级：越高越优先（硬通货）
+  "weight": 3       // 权重：同优先级下的选中概率
 }
 ```
 
-3. 行为说明
+### 3. 应用场景示例
 
-- 先过滤不可用账号（禁用/冷却/配额）。
-- 按 `priority` 分组，取最高优先级组。
-- 组内按 `weight` 加权随机选择。
-- `weight` 缺失默认 1，`weight <= 0` 表示不参与选择。
+*   **主备切换 (Active/Standby)**:
+    *   主账号设 `priority: 10`
+    *   备用账号设 `priority: 0`
+    *   结果：只要主账号活着，备用账号永远不会被调用。
 
-`auth-dir` 的路径在配置文件中通过 `auth-dir` 指定，
-修改账号 JSON 后会由文件监控自动生效。
+*   **加权负载均衡**:
+    *   所有账号 `priority` 保持一致（如默认 0）。
+    *   大容量账号 `weight: 10`
+    *   小容量账号 `weight: 1`
+    *   结果：大账号处理约 90% 的流量。
 
 ## 管理 API 文档
 

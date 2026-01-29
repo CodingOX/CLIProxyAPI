@@ -118,7 +118,8 @@ fi
 echo "Please select an option:"
 echo "1) Run using Pre-built Image (Recommended)"
 echo "2) Build from Source and Run (For Developers)"
-read -r -p "Enter choice [1-2]: " choice
+echo "3) Build and Push to Docker Hub (For Maintainers)"
+read -r -p "Enter choice [1-3]: " choice
 
 # --- Step 2: Execute based on choice ---
 case "$choice" in
@@ -173,8 +174,50 @@ case "$choice" in
     echo "Build complete. Services are starting."
     echo "Run 'docker compose logs -f' to see the logs."
     ;;
+  3)
+    echo "--- Building and Pushing to Docker Hub (Multi-arch) ---"
+
+    # Get Version Information
+    VERSION="$(git describe --tags --always --dirty)"
+    COMMIT="$(git rev-parse --short HEAD)"
+    BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    REPO_NAME="wendunfu/cli-proxy-api"
+
+    echo "Building with the following info:"
+    echo "  Version: ${VERSION}"
+    echo "  Commit: ${COMMIT}"
+    echo "  Build Date: ${BUILD_DATE}"
+    echo "  Repository: ${REPO_NAME}"
+    echo "  Platforms: linux/amd64, linux/arm64"
+    echo "----------------------------------------"
+
+    # Check if a buildx builder exists and create one if not
+    if ! docker buildx inspect default_builder > /dev/null 2>&1; then
+        echo "Creating new buildx builder..."
+        docker buildx create --name default_builder --use --bootstrap
+    else
+        echo "Using existing buildx builder..."
+        docker buildx use default_builder
+    fi
+
+    echo "Building and pushing multi-arch image..."
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      --tag "${REPO_NAME}:latest" \
+      --tag "${REPO_NAME}:${VERSION}" \
+      --build-arg VERSION="${VERSION}" \
+      --build-arg COMMIT="${COMMIT}" \
+      --build-arg BUILD_DATE="${BUILD_DATE}" \
+      --push \
+      .
+
+    echo "Push complete!"
+    echo "Images pushed with multi-arch support:"
+    echo "  - ${REPO_NAME}:latest"
+    echo "  - ${REPO_NAME}:${VERSION}"
+    ;;
   *)
-    echo "Invalid choice. Please enter 1 or 2."
+    echo "Invalid choice. Please enter 1, 2 or 3."
     exit 1
     ;;
 esac
